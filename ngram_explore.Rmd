@@ -1,0 +1,355 @@
+---
+title: 'Milestone Report: N-gram word prediction'
+author: "*Armin Najarpour Foroushani*"
+date: "*`r format(Sys.time(), '%d %B, %Y')`*"
+output:
+  html_document:
+    keep_md: yes
+    toc: true
+    theme: default
+  pdf_document: default
+  word_document: default
+---
+
+
+### Project overview and goal
+People spend a considerable amount of time on their mobile devices for several activities. However, typing on these devices can be a serious pain. Using predictive text models, SwiftKey builds a smart keyboard that makes it easier for people to type on mobile devices. When someone types, the keyboard suggests few options for what the next word might be.
+
+The goal of capstone project is to build similar predictive text models. This report will cover text data cleaning and exploratory analysis to explain the major features of the data, and then will explain plans for creating a prediction algorithm and Shiny app.
+
+Similar to other data science problems, analysis of text data follows the same steps: data gathering and cleaning, exploratory data analysis, statistical inference, model building, prediction, and developing data product. However, because of the nature of text data which is unstructured, preprocessing steps especially the data cleaning need extra effort to convert the data into a representable forms. One example among these efforts is tokenization. Tokenization is the act of breaking up a sequence of string into pieces such as words, characters, or any other elements [1](https://www.techopedia.com/definition/13698/tokenization). 
+
+We will explain these steps for analysis of our data in the next sections.
+
+### Load required libraries
+We first delete all environments filled with data and values and then load required libraries. Among these libraries, tm is specifically for the text mining, RWeka contains a collection of algorithms for data mining and we use it for N-gram tokenization, wordcloud and RColorBrewer are used for generation of word clouds, and stringr for manipulation of strings.
+```{r load_package, echo=TRUE, warning=FALSE, message=FALSE}
+library(tm) # for text mining
+library(RWeka) # for tokenization
+library(wordcloud) # word-cloud generator
+library(RColorBrewer) # color palettes
+library(stringr) # string manipulation
+library(stringi)
+library(rmarkdown)
+```
+
+### Data
+We download the data and load/manipulate it in R and report some statistics about it. The text data are collected from publicly available sources by a web crawler. Each entry is tagged with a type of entry (i.e. a type of website it is collected from). We use data collected from newspaper, personal blogs, and twitter written in English.
+
+#### Download and load the data
+This project uses Swiftkey dataset available [here](https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip).
+```{r download_data, eval=FALSE}
+file_link <- "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
+download.file(file_link, destfile="SwiftKeyData.zip",  method="curl")
+unzip("SwiftKeyData.zip")
+```
+The unzipped folder includes data from three different entries of text (“blogs”, “news” and “twitter”) for four different languages (German, English, finnish and Russian). In this exercise, we will use the English database.
+Next, we read the data from each entry separately. Since it might contain words from other languages, UTF-8 encoding was used. For news data, we read it in binary mode as in the text mode it decreases the size to 19.2 Mb. For twitter data we use skipNul = TRUE to skip nulls without any warnings.
+
+```{r load_data, cache = TRUE, warning=FALSE, message=FALSE}
+
+con <- file("en_US.blogs.txt", "r")
+en_US_blogs <- readLines(con, encoding="UTF-8")
+close(con)
+
+con <- file("en_US.news.txt", "rb")
+en_US_news <- readLines(con, encoding="UTF-8")
+close(con)
+
+con <- file("en_US.twitter.txt", "r")
+en_US_twitter <- readLines(con, encoding="UTF-8", skipNul = TRUE)
+close(con)
+
+```
+
+#### Basic summary statistics
+First three lines from each file is presented as follow: 
+```{r example_data, echo=TRUE}
+cat(en_US_blogs[1:3], sep="\n")
+cat(en_US_news[1:3], sep="\n")
+cat(en_US_twitter[1:3], sep="\n")
+```
+
+In addition, basic information about each file is summarized in the following table (file name, number of lines in each file, number of words, size of each file in Mb, and size of loaded object in Mb).
+```{r summary, cache = TRUE, echo=TRUE, layout="l-body-outset"}
+
+summary_stat <- function(en_US_blogs, en_US_news, en_US_twitter){
+        file_names <- c("en_US.blogs.txt", "en_US.news.txt", 
+                        "en_US.twitter.txt")
+        file_sizes <- file.info(file_names)$size/(1024^2)
+        object_sizes <- c(object.size(en_US_blogs), 
+                          object.size(en_US_news), 
+                          object.size(en_US_twitter))/(1024^2)
+        number_of_lines <- c(length(en_US_blogs), 
+                             length(en_US_news), 
+                             length(en_US_twitter))
+        number_of_words <- c(stri_stats_latex(en_US_blogs)[4], 
+                             stri_stats_latex(en_US_news)[4], 
+                             stri_stats_latex(en_US_twitter)[4])
+        basic_summary <- data.frame("File name" = file_names, 
+                                    "File size" = file_sizes,
+                                    "Object size" = object_sizes, 
+                                    "Number of lines" = number_of_lines, 
+                                    "Number of words" = number_of_words)
+        names(basic_summary)<-c("File name", "File size", 
+                                "Object size", "Number of lines", 
+                                "Number of words")
+        return(basic_summary)
+}
+
+paged_table(summary_stat(en_US_blogs, en_US_news, en_US_twitter))
+```
+
+#### Sampling
+As the basic summary shows, these three files are quite big! Analyzing such a big dataset requires a lot of memory and takes very long time. However, a random sample is representative of data. So, from each file we create a subsample which includes 1% of the lines and make our analysis based on these subsamples. An exception was twitter data which we included 0.7% as it had more lines. For the sampling task, we developed random_subsample function which uses rbinom function.
+```{r sampling, echo=TRUE}
+random_subsample <- function(dataset, sampling_rate){
+        rand_row <- as.logical(rbinom(length(dataset), 1, sampling_rate))
+        sub_data <- dataset[rand_row]
+        return(sub_data)
+}
+sub_en_US_blogs <- random_subsample(en_US_blogs, 0.01)
+sub_en_US_news <- random_subsample(en_US_news, 0.01)
+sub_en_US_twitter <- random_subsample(en_US_twitter, 0.007)
+```
+
+#### Train-test split
+In order to use the dataset for the prediction task in the future, we split it into training and test sets. Moreover, exploratory analysis should be performed on the training set. Therefore, we first shuffle the data and use 80% of the lines for training and 20% for test set:
+```{r train_test_split, echo=TRUE}
+train_test_split<-function(dataset, train_rate=0.8){
+        l <- length(dataset)
+        rand_val <- runif(l)
+        ord <- order(rand_val)
+        dataset <- dataset[ord]
+        a <- floor(train_rate*l)
+        training_set <- dataset[1:a]
+        test_set <- dataset[(a+1):l]
+        return(list("training_set"=training_set, "test_set"=test_set))
+}
+tr_ts_blogs <- train_test_split(sub_en_US_blogs, train_rate=0.8)
+tr_ts_news <- train_test_split(sub_en_US_news, train_rate=0.8)
+tr_ts_twitter <- train_test_split(sub_en_US_twitter, train_rate=0.8)
+
+```
+
+### Data cleaning
+Text data contains several components that we may want to change or remove to obtain a clean version. For this purpose we use tm package. To cleaning the data we followed these steps:
+
+1. Transforming data into corpus of text.
+2. Removing punctuations except intra-word contractions.
+3. Converting all the characters to the lower case to make the text uniform.
+4. Removing numbers.
+5. Removing stop words (words that do not carry much meaning about a sentence).
+6. Removing profanity and offensive words. The list of these words is available [here](https://github.com/RobertJGabriel/Google-profanity-words/blob/master/list.txt).
+7. Removing extra white spaces.
+
+We do not perform stemming as it sometimes cuts the words incorrectly. The following text_cleaner function implements the above steps:
+```{r cleaning, echo=TRUE, cache = TRUE}
+
+text_cleaner <- function(text_data, keep_numbers=FALSE, keep_stopwords=FALSE) {
+  
+        # Convert the data
+        docs <- VCorpus(VectorSource(text_data))
+        profanity_list <- readLines("profanity_list.txt", encoding = "UTF-8")
+        
+        # Text cleaning
+        toSpace <- content_transformer(function(x, pattern) {return (gsub(pattern, " ", x))})
+        docs <- tm_map(docs, toSpace, "[^[:alnum:][:space:]']|<.*>") # Remove punctuation
+        docs <- tm_map(docs, removePunctuation,
+                       preserve_intra_word_contractions = TRUE) # Remove punctuation
+        docs <- tm_map(docs, content_transformer(tolower)) # Convert to lower case
+        if (!keep_numbers){docs <- tm_map(docs, removeNumbers)} # Remove numbers
+        if (!keep_stopwords){docs <- tm_map(docs, removeWords, stopwords("english"))} # Remove stopwords
+        docs <- tm_map(docs, removeWords, profanity_list) # Remove profanity words
+        docs <- tm_map(docs, stripWhitespace) # Remove extra whitespaces
+
+        return(docs)
+}
+
+docs_tr_blogs <- text_cleaner(tr_ts_blogs$training_set)
+docs_tr_news <- text_cleaner(tr_ts_news$training_set)
+docs_tr_twitter <- text_cleaner(tr_ts_twitter$training_set)
+```
+
+#### Foreign Language Evaluation
+The code developed here does not evaluate foreign languages. However, if it is necessary to evaluate words from foreign languages, “removeWords” function can be used together with a foreign dictionary. The difference in word count can provide insight about words coming from other languages in the corpora.
+
+### Exploratory Data Analysis
+In order to explore the distribution of words and relationship between the words in the corpora, we create 1-gram (word), 2-gram, 3-gram, and 4-gram tokens and determine their frequencies in each text file. Then we will present their frequency using word-clouds and barplots.
+
+#### N-gram tokenization
+n_gram_tokenizer: tokenizes a text into n-grams (depending on value n).
+tokens_freq_table: creates a table showing frequency of each token.
+all_tokens_table: builds frequency table for 1, 2, 3, and 4 tokens.
+```{r tokenization, echo=TRUE, cache = TRUE}
+n_gram_tokenizer <- function(docs, n) {
+        ngramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = n, max = n))
+        tdm <- TermDocumentMatrix(docs, control=list(tokenize = ngramTokenizer))
+        return(tdm)
+}
+
+tokens_freq_table <- function(tdm) {
+        m <- as.matrix(tdm)
+        v <- sort(rowSums(m), decreasing=TRUE)
+        d <- data.frame(token = names(v), freq=v)
+        return(d)
+}
+
+all_tokens_table <- function(docs){
+        tdm <- n_gram_tokenizer(docs, 1)
+        d1 <- tokens_freq_table(tdm)
+        
+        tdm <- n_gram_tokenizer(docs, 2)
+        d2 <- tokens_freq_table(tdm)
+        
+        tdm <- n_gram_tokenizer(docs, 3)
+        d3 <- tokens_freq_table(tdm)
+        
+        tdm <- n_gram_tokenizer(docs, 4)
+        d4 <- tokens_freq_table(tdm)
+        
+        return(list("d1"=d1, "d2"=d2, "d3"=d3, "d4"=d4))
+}
+d_blogs <- all_tokens_table(docs_tr_blogs)
+d_news <- all_tokens_table(docs_tr_news)
+d_twitter <- all_tokens_table(docs_tr_twitter)
+```
+
+example of words and 2-gram frequencies for the blog entry is as follows:
+```{r freq_blog, echo=FALSE, eval=TRUE, layout="l-body-outset"}
+paged_table(d_blogs$d1[1:5,])
+paged_table(d_blogs$d2[1:5,])
+```
+Example of 2-gram frequencies in the news data is as follows:
+```{r freq_news, echo=FALSE, eval=TRUE, layout="l-body-outset"}
+paged_table(d_news$d2[3:7,])
+```
+And, example of 3-gram frequencies in the twitter data is as follows:
+```{r freq_twitter, echo=FALSE, eval=TRUE, layout="l-body-outset"}
+paged_table(d_twitter$d3[1:5,])
+```
+
+#### Word cloud
+Word cloud is a visual representation of text data. Using this representation, larger words in the image are corresponding to words that appeared more frequently in the text. Here we present results for 1-gram and 2-gram tokens. For the **blogs**, word cloud representations are as follows:
+
+```{r word_cloud_blogs, echo=FALSE, warning=FALSE, message=FALSE}
+
+word_cloud <- function(d){
+        set.seed(1234)
+        wordcloud(words = d$token, freq = d$freq, min.freq = 7, max.words=50, random.order=FALSE, rot.per=0.35, colors=brewer.pal(8, "Dark2"))
+}
+
+word_cloud(d_blogs$d1)
+word_cloud(d_blogs$d2)
+
+```
+
+For the **news** data word cloud representation of 1 and 2-grams are:
+
+```{r word_cloud_news, echo=FALSE, warning=FALSE, message=FALSE}
+
+word_cloud(d_news$d1)
+word_cloud(d_news$d2)
+
+```
+
+And finally, for the **twitter** data it is:
+
+```{r word_cloud_twitter, echo=FALSE, warning=FALSE, message=FALSE}
+
+word_cloud(d_twitter$d1)
+word_cloud(d_twitter$d2)
+
+```
+
+#### Barplot
+Another way to show the most frequent words in a text is to use barplot. Here, we report the barplot of the most 20 frequent tokens for 1, 2, and 3-grams. For the **blogs** the results is as follows:
+
+```{r blogs_bar, echo=FALSE, warning=FALSE, message=FALSE}
+
+word_bar <- function(d, m){
+        par(mar = c(9, 4.1, 4.1, 2.1))
+        barplot(d[1:m, ]$freq, las = 2, names.arg = d[1:m, ]$token,
+                col ="lightblue", main ="Most frequent tokens",
+                ylab = "Word frequencies")
+}
+
+word_bar(d_blogs$d1, 20)
+word_bar(d_blogs$d2, 20)
+word_bar(d_blogs$d3, 20)
+```
+
+For the **news** the plots are as follows:
+
+```{r news_bar, echo=FALSE, warning=FALSE, message=FALSE}
+word_bar(d_news$d1, 20)
+word_bar(d_news$d2, 20)
+word_bar(d_news$d3, 20)
+```
+
+And finally, for the **twitter** text data plots are:
+
+```{r twitter_bar, echo=FALSE, warning=FALSE, message=FALSE}
+word_bar(d_twitter$d1, 20)
+word_bar(d_twitter$d2, 20)
+word_bar(d_twitter$d3, 20)
+```
+
+#### Some interesting findings
+The above plots show that "one", "will", "can", "just", "said", and "like" are the most frequently appeared words. For 2-gram tokens they differ among the files. For example, in blogs, "don't", "didn't", and "can't" are the most frequent while in twitter, "right now", "last night", and "happy birthday" are the most frequent ones.
+
+Then we asked how many unique words is needed to cover 50% of all word instances in the language? what about 90%?
+To answer this question we counted unique words to cover coverage% of all word instances in the language. For this aim we used the following function:
+
+```{r coverage, echo=TRUE, layout="l-body-outset"}
+
+words_coverage <- function(d, coverage){
+        for (frequent_words in 1:nrow(d)){
+                frequent_words_ratio <- sum(d$freq[1:frequent_words])/sum(d$freq)
+                if (frequent_words_ratio > coverage){
+                        break
+                }
+                
+        }
+        return(frequent_words)
+}
+
+```
+
+For the **blogs** entry, the number of unique words for 50% and 90% coverage are:
+```{r coverage_blogs, echo=FALSE, layout="l-body-outset"}
+coverage_blogs <- data.frame("50%"=words_coverage(d_blogs$d1, 0.5), "90%"=words_coverage(d_blogs$d1, 0.9), "all"=nrow(d_blogs$d1))
+names(coverage_blogs) <- c("50%", "90%", "all")
+paged_table(coverage_blogs)
+```
+
+For the **news** entry, the number of unique words for 50% and 90% are:
+```{r coverage_news, echo=FALSE, layout="l-body-outset"}
+coverage_news <- data.frame("50%"=words_coverage(d_news$d1, 0.5), "90%"=words_coverage(d_news$d1, 0.9), "all"=nrow(d_news$d1))
+names(coverage_news) <- c("50%", "90%", "all")
+paged_table(coverage_news)
+```
+
+For the **twitter** entry, the number of unique words for 50% and 90% are:
+```{r coverage_twitter, echo=FALSE, layout="l-body-outset"}
+coverage_twitter <- data.frame("50%"=words_coverage(d_twitter$d1, 0.5), "90%"=words_coverage(d_twitter$d1, 0.9), "all"=nrow(d_twitter$d1))
+names(coverage_twitter) <- c("50%", "90%", "all")
+paged_table(coverage_twitter)
+```
+As we can see, for 90% coverage, less than 50% of unique word instances are needed.
+
+#### Increasing Coverage
+To increase the coverage we should reduce the number of low-frequency unique words. This can be done with stemming or using a thesaurus library of words.
+
+### plans for creating a prediction algorithm and Shiny app
+The goal is to build a n-gram model for predicting the next word based on the previous 1, 2, or 3 words. In the simplest case, we assume that all the words does appear in the corpora. In this case, n-gram model can efficiently be stored as Markov Chains. Following n-gram language models, the probability of word $w$ given some history $h = w_{1}, w_{2}, \dots, w_{n}$, where $h$ includes all the words prior to $w$, is $P(w \mid h) = \frac{C(hw)}{C(h)}$. In this formulation $C$ means count (tokens frequency). So, it is the ratio of times that $hw$ occurs divided by times that $h$ occurs. Although $h$ is the whole history, in practice we consider n to be 1, 2, 3, 4 or 5. That means only prior few words are considered as the history ($h$). Using Bayes' theorem, probability of a word sequence $w_{1}, \dots, w_{n},w$ can be easily calculated. In this formulation model parameter n determines complexity of the model. Choosing small n can lead to not very accurate formulation and choosing large n may make it so specific. So, a value like 3 or 4 may be an optimal choice. But, to select an optimal value, we need to train and test the model and use cross validation (tuning hyperparameter n).
+
+In practical problems we need to handle n-grams that are not observed in the corpora. A simple solution is to "smooth" the probabilities, i.e. to give all n-grams a non-zero probability even if they aren't observed in the data. A more advanced solution for smoothing is to use backoff models to estimate the probability of unobserved n-grams. In our model we will use backoff to deal with unobserved n-grams.
+
+Of course similar to the other machine learning prediction problems, model evaluation is made on unseen data (test set). The model is built using Markov model on training data as we selected above and will be evaluated on the test set.
+
+#### Runtime and memory
+The prediction should be performed fast and consume low memory as they run on mobile phones, which typically have limited memory and processing power compared to desktop computers. So, we need to minimize both the size and runtime of the model in order to provide a reasonable experience to the user.
+
+#### Shiny application design
+I prefer simple graphical user interface for an application. So, the interface only takes a sequence of words as input and suggests three most probable words as output. 
