@@ -1,0 +1,48 @@
+---
+title: "Next Word Prediction"
+author: "Armin Najarpour Foroushani"
+date: "12/08/2020"
+output: 
+  ioslides_presentation:
+          highlight: textmate
+          template: quarterly-report.html
+          smaller: true
+          theme: cosmo
+---
+
+## Overview
+
+
+- <span style="color: black;">This application predicts the next word given a two word prefix</span>
+
+- <span style="color: black;">The model is trained based on Katz's back-off algorithm</span>
+
+- <span style="color: black;">Text data were collected from English language blogs, news, and twitter</span>
+
+- <span style="color: black;">You can enter your two word prefix to the App developed in shiny app and it gives you three most probable next words</span>
+
+- <span style="color: black;">The main aspect of this app is "simplicity"</span>
+
+
+## Katz's back-off algorithm
+![](backoff_model.png){width=75%}
+
+
+## Application
+
+![](app_usage.png){width=99.9%}
+
+
+- <span style="color: black;">Enter your two word prefix in the input text box</span>
+- <span style="color: black;">Press submit button</span>
+- <span style="color: black;">The output will appear</span>
+- <span style="color: black;">You can find the next word prediction app in [here](https://armin12.shinyapps.io/CapstoneApp/)</span>
+
+
+***
+<br />
+<br />
+<br />
+<br />
+<br />
+<center> <font size="6"><span style="color: blue;">**Thank you for attending my presentation**</span></font> </center>
