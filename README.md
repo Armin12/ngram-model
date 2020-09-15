@@ -7,3 +7,4 @@ The goal of capstone project is to build similar predictive text models. This re
 Similar to other data science problems, analysis of text data follows the same steps: data gathering and cleaning, exploratory data analysis, statistical inference, model building, prediction, and developing data product. However, because of the nature of text data which is unstructured, preprocessing steps especially the data cleaning need extra effort to convert the data into a representable forms. One example among these efforts is tokenization. Tokenization is the act of breaking up a sequence of string into pieces such as words, characters, or any other elements 1.
 
 For details about this project visit: https://rpubs.com/Armin12/638943
+You can also see the next word prediction app here: https://armin12.shinyapps.io/CapstoneApp/
